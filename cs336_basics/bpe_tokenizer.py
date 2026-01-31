@@ -63,7 +63,7 @@ def process_single_chunk(input_path, start, end, special_tokens_bytes, COMPLIED_
 
         # 2. replace \r\n to \n
         # this is mainly due to Windows vs Unix
-        chunk_bytes = chunk_bytes.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        # chunk_bytes = chunk_bytes.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
         # 3. Remove special tokens
         # re.escape here auto translate '|' into '\|'
@@ -264,6 +264,8 @@ class Tokenizer:
         self.word_cache: dict[str, list[int]] = dict()
         # to search for the id of bytes in O(1)
         self.vocab2id:dict[bytes, int] = {b: i for i, b in vocab.items()}
+        self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""  
+        self.COMPLIED_PAT = re.compile(self.PAT)
 
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):  
@@ -288,52 +290,67 @@ class Tokenizer:
         return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
 
     def encode(self, text: str)-> list[int]:
-        PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""  
-        COMPLIED_PAT = re.compile(PAT)
-        
         result_ids: list[int] = []
 
         # * pre-tokenize
+        if self.special_tokens:
+            sorted_special = sorted(self.special_tokens, key=len, reverse=True)
+            special_pattern = "("+"|".join(re.escape(t) for t in sorted_special)+")"
+            # 切分后的 segments 会是：["普通文本", "<|endoftext|>", "普通文本", ...]
+            segments = re.split(special_pattern, text)
+        else:
+            segments = [text]
         # Decode
-        for match in re.finditer(COMPLIED_PAT, text):
-            word_str = match.group()
-            # cached words
-            if word_str in self.word_cache:
-                ids = self.word_cache[word_str]
-                result_ids += ids
+        for segment in segments:
+            if not segment:
                 continue
-
-            # words -> tuple
-            # eg. "hello" -> (b'h', b'e', b'l', b'l', b'o')
-            # word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
-            word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
-
-            # apply the merges
-            while True:
-                pairs = []
-                for i in range(len(word_tuple) - 1):
-                    pairs.append((word_tuple[i], word_tuple[i+1]))
-                
-                # 找到这些 pair 中在 merges_dict 里 rank 最小的一个
-                target_pair = min(pairs, key=lambda p: self.merges_dict.get(p, float('inf')))
-                
-                if target_pair not in self.merges_dict:
-                    break  # 没有可以继续合并的了
-                    
-                # 执行合并：将序列中所有的 bigram 替换为合并后的 bytes
-                replacement = target_pair[0] + target_pair[1]
-                word_tuple = merge_at_word(word_tuple, target_pair, replacement)
-                
-                if len(word_tuple) == 1:
-                    break
             
-            # get the ids
-            ids = []
-            for token_bytes in word_tuple:
-                ids.append(self.vocab2id[token_bytes])
-            result_ids += ids
-            self.word_cache[word_str] = ids
+            # handle special_tokens
+            if self.special_tokens and segment in self.special_tokens:
+                st_bytes = segment.encode("utf-8")
+                result_ids.append(self.vocab2id[st_bytes])
+                continue
+            
+            for match in re.finditer(self.COMPLIED_PAT, segment):
+                word_str = match.group()
+                # cached words
+                if word_str in self.word_cache:
+                    ids = self.word_cache[word_str]
+                    result_ids += ids
+                    continue
 
+                # words -> tuple
+                word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
+
+                # apply the merges
+                while True:
+                    # no pair if there is only one char
+                    if len(word_tuple) < 2:
+                        break
+
+                    pairs = []
+                    for i in range(len(word_tuple) - 1):
+                        pairs.append((word_tuple[i], word_tuple[i+1]))
+                    
+                    # 找到这些 pair 中在 merges_dict 里 rank 最小的一个
+                    target_pair = min(pairs, key=lambda p: self.merges_dict.get(p, float('inf')))
+                    
+                    if target_pair not in self.merges_dict:
+                        break  # 没有可以继续合并的了
+                        
+                    # 执行合并：将序列中所有的 bigram 替换为合并后的 bytes
+                    replacement = target_pair[0] + target_pair[1]
+                    word_tuple = merge_at_word(word_tuple, target_pair, replacement)
+                    
+                    if len(word_tuple) == 1:
+                        break
+                
+                # get the ids
+                ids = []
+                for token_bytes in word_tuple:
+                    ids.append(self.vocab2id[token_bytes])
+                result_ids += ids
+                self.word_cache[word_str] = ids
         return result_ids
 
     def encode_iterable(self, iterable: Iterable[str])->Iterator[int]:
