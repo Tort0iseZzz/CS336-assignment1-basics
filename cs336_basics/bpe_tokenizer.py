@@ -2,7 +2,7 @@ import os
 import multiprocessing
 import regex as re
 from collections import Counter, defaultdict
-from typing import BinaryIO
+from typing import BinaryIO, Iterable, Iterator
 import json
 
 
@@ -73,14 +73,14 @@ def process_single_chunk(input_path, start, end, special_tokens_bytes, COMPLIED_
         for segment in segments:
             if not segment:
                 continue
-            # Decode  # star: we shouldn't do that!
+            # Decode
             text = segment.decode("utf-8", errors="ignore")
 
             # 4. pre-tokenize
             for match in re.finditer(COMPLIED_PAT, text):
                 word_str = match.group()
                 # words -> tuple
-                # eg. b"hello" -> (b'h', b'e', b'l', b'l', b'o')
+                # eg. "hello" -> (b'h', b'e', b'l', b'l', b'o')
                 # word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
                 word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
                 local_counts[word_tuple] += 1
@@ -248,14 +248,22 @@ def save_tokenizer_assets(vocab, merges, vocab_path, merges_path):
     print(f"✅ 已成功保存词汇表至: {vocab_path}")
     print(f"✅ 已成功保存合并规则至: {merges_path}")
 
-"""
+
 class Tokenizer:
-    def __init__(self, vocab, merges, special_tokens=None):
-        self.vocab = vocab
-        self.merges = merges
+    def __init__(self, vocab: dict[int, bytes],
+                merges: list[tuple[bytes, bytes]],
+                special_tokens: list[str] | None = None):
+        self.vocab: dict[int,bytes] = vocab
+        self.merges: list[tuple[bytes, bytes]] = merges
         self.special_tokens = None
         if special_tokens:
             self.special_tokens = special_tokens
+        # to search for the rank of a pair in O(1)
+        self.merges_dict: dict[tuple[bytes, bytes], int] = {pair: i for i, pair in enumerate(self.merges)}
+        # to cache word_str
+        self.word_cache: dict[str, list[int]] = dict()
+        # to search for the id of bytes in O(1)
+        self.vocab2id:dict[bytes, int] = {b: i for i, b in vocab.items()}
 
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):  
@@ -280,46 +288,95 @@ class Tokenizer:
         return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
 
     def encode(self, text: str)-> list[int]:
-        # * pre-tokenize
-        PAT = rb'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+ 
+        PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""  
         COMPLIED_PAT = re.compile(PAT)
-        special_tokens_bytes = None
-        if self.special_tokens:
-            special_tokens_bytes = [
-                t.encode("utf-8") if isinstance(t, str) else t 
-                for t in self.special_tokens
-            ]
-
-        chunk_bytes = text.encode("utf-8", errors = "ignore")
-        segments = [chunk_bytes]
-
-        if special_tokens_bytes:
-            combined_special_regex = b'|'.join([re.escape(token) for token in special_tokens_bytes])
-            segments = re.split(combined_special_regex, chunk_bytes)
         
-        for segment in segments:
-            if not segment:
+        result_ids: list[int] = []
+
+        # * pre-tokenize
+        # Decode
+        for match in re.finditer(COMPLIED_PAT, text):
+            word_str = match.group()
+            # cached words
+            if word_str in self.word_cache:
+                ids = self.word_cache[word_str]
+                result_ids += ids
                 continue
-            for match in re.finditer(COMPLIED_PAT, segment):
-                word = match.group()
-                # words -> tuple
-                # eg. "hello" -> (b'h', b'e', b'l', b'l', b'o')
-                word_tuple = tuple(bytes([b]) for b in word)
 
+            # words -> tuple
+            # eg. "hello" -> (b'h', b'e', b'l', b'l', b'o')
+            # word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
+            word_tuple = tuple(bytes([b]) for b in word_str.encode("utf-8"))
 
+            # apply the merges
+            while True:
+                pairs = []
+                for i in range(len(word_tuple) - 1):
+                    pairs.append((word_tuple[i], word_tuple[i+1]))
+                
+                # 找到这些 pair 中在 merges_dict 里 rank 最小的一个
+                target_pair = min(pairs, key=lambda p: self.merges_dict.get(p, float('inf')))
+                
+                if target_pair not in self.merges_dict:
+                    break  # 没有可以继续合并的了
+                    
+                # 执行合并：将序列中所有的 bigram 替换为合并后的 bytes
+                replacement = target_pair[0] + target_pair[1]
+                word_tuple = merge_at_word(word_tuple, target_pair, replacement)
+                
+                if len(word_tuple) == 1:
+                    break
+            
+            # get the ids
+            ids = []
+            for token_bytes in word_tuple:
+                ids.append(self.vocab2id[token_bytes])
+            result_ids += ids
+            self.word_cache[word_str] = ids
 
-
-
-
-
-
-
-
-
-
-
+        return result_ids
 
     def encode_iterable(self, iterable: Iterable[str])->Iterator[int]:
+        remainder = ""
+        
+        # 预先准备好匹配特殊 token 的正则，用于寻找安全边界
+        #special_pat = None
+        #if self.special_tokens:
+        #   special_pat = "|".join(re.escape(t) for t in self.special_tokens)
 
-    def decode(self, ids:list[int])-> str:
-"""
+        for chunk in iterable:
+            # 1. 拼接上一次剩下的“尾巴”
+            current_text = remainder + chunk
+            
+            # 2. 寻找安全切分点
+            last_safe_index = max(
+                current_text.rfind(" "), 
+                current_text.rfind("\n"),
+                current_text.rfind("\r")
+            )
+            
+            # 如果存在特殊 token，还要考虑不要切断特殊 token
+            # 这里简单起见，如果没找到空格，我们就不切分，继续积累 remainder
+            if last_safe_index != -1:
+                # 安全的部分
+                ready_to_encode = current_text[:last_safe_index + 1]
+                # 剩下的尾巴
+                remainder = current_text[last_safe_index + 1:]
+    
+                # 3. 调用 encode 处理安全部分，并逐个 yield ID
+                for token_id in self.encode(ready_to_encode):
+                    yield token_id
+            else:
+                # 没找到安全边界，全存入 remainder 等待下一块
+                remainder = current_text
+                
+        # 最后，处理最后剩下的部分
+        if remainder:
+            for token_id in self.encode(remainder):
+                yield token_id
+
+    def decode(self, ids:list[int])->str:
+        # collect all bytes
+        all_bytes = b"".join(self.vocab[i] for i in ids)
+        # decode them all
+        return all_bytes.decode("utf-8", errors="replace")
