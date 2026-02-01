@@ -4,6 +4,7 @@ import regex as re
 from collections import Counter, defaultdict
 from typing import BinaryIO, Iterable, Iterator
 import json
+from tqdm import tqdm # 监控进度
 
 
 def find_chunk_boundaries(
@@ -131,6 +132,7 @@ def train_bpe(
         for i in range(len(boundaries) - 1)
     ]
     
+    print("Multiprocessing chunk_bytes...")
     # 2. multiprocessing_pool
     # starmap 会自动将 tasks 中的元组展开作为 process_single_chunk 的参数
     with multiprocessing.Pool(processes=num_processes) as pool:
@@ -156,7 +158,8 @@ def train_bpe(
 
     # start generate
     generate_count = vocab_size - 256 - len(special_tokens)
-    for _ in range(generate_count):
+    print(f"start BPE, generating {generate_count} tokens...")
+    for i in tqdm(range(generate_count), desc="BPE merging"):
         if not pair_counts: break
         
         # 1. find max pair
@@ -238,13 +241,12 @@ def save_tokenizer_assets(vocab, merges, vocab_path, merges_path):
     
     # --- 保存 Merges ---
     # 核心点：保持顺序，且每行存储一对合并规则
+    # 修改保存逻辑
     with open(merges_path, 'w', encoding='utf-8') as f:
-        for pair in merges:
-            # 同样使用 latin-1 确保字节被安全转换成字符
-            p0 = pair[0].decode('latin-1')
-            p1 = pair[1].decode('latin-1')
-            f.write(f"{p0} {p1}\n")
-
+        for p0, p1 in merges:
+            # 使用十六进制，避免和空格混淆
+            f.write(f"{p0.hex()} {p1.hex()}\n")
+    
     print(f"✅ 已成功保存词汇表至: {vocab_path}")
     print(f"✅ 已成功保存合并规则至: {merges_path}")
 
@@ -280,12 +282,12 @@ class Tokenizer:
         if os.path.exists(merges_filepath):
             with open(merges_filepath, 'r', encoding='utf-8') as f:
                 for line in f:
-                    line = line.rstrip('\n')
+                    line = line.strip()
                     if not line: continue
-                    # 按空格切分，并还原回字节
                     parts = line.split(' ')
                     if len(parts) == 2:
-                        merges.append((parts[0].encode('latin-1'), parts[1].encode('latin-1')))
+                        # 从十六进制还原回 bytes
+                        merges.append((bytes.fromhex(parts[0]), bytes.fromhex(parts[1])))
         
         return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
 
