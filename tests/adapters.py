@@ -32,7 +32,8 @@ def run_linear(
     """
 
     model = cs336_basics.transformer_arch.Linear(in_features=d_in, out_features=d_out)
-
+    # here, to test the module, we will not use the initial weight but the given one
+    # state_dict + load_state_dict loads the given weights to self.weight
     state_dict = {"weight": weights}
     model.load_state_dict(state_dict)
     return model.forward(in_features)
@@ -388,7 +389,12 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    model = cs336_basics.transformer_arch.RMSNorm(d_model=d_model, eps=eps)
+
+    state_dict = {"gain": weights}
+    model.load_state_dict(state_dict)
+    return model.forward(in_features)
+
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:

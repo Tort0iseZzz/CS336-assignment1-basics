@@ -63,3 +63,44 @@ class Embedding(torch.nn.Module):
     def forward(self, token_ids: Tensor) -> Tensor:
         """Lookup the embedding vectors for the given token IDs."""
         return self.weight[token_ids]
+    
+
+class RMSNorm(torch.nn.Module):
+    """Root Mean Square Layer Normalization"""
+    __constants__ = [
+        "d_model",
+        "eps"
+    ]
+    d_model: int
+    eps: float
+    gain: Tensor
+
+    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
+        """Construct the RMSNorm module."""
+        super().__init__()
+
+        self.d_model = d_model # Hidden dimension of the model
+        self.eps = eps # Epsilon value for numerical stability
+
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.gain = Parameter(
+            torch.ones((d_model), **factory_kwargs)
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        input:  (batch_size, sequence_length, d_model)
+        return: (batch_size, sequence_length, d_model)
+        """
+        # upcast input to torch.float32 to prevent overflow
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+        # (sum{xi^2}) / d_model -> (..., 1)
+        # "/d_model" is already in mean process
+        ms = torch.mean(x**2, dim=-1, keepdim=True)
+        # xi / sqrt(ms + eps): (..., d_model) * (..., 1) = (..., d_model)
+        normed_x = x * torch.rsqrt(ms + self.eps)
+        # normed_x * gaini: (..., d_model) * (d_model) = (..., d_model)
+        result = normed_x * self.gain
+        # Return the result in the original dtype
+        return result.to(in_dtype)
