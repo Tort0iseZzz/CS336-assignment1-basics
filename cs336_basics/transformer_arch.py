@@ -12,11 +12,12 @@ class Linear(torch.nn.Module):
     def __init__(self, in_features:int, out_features:int, device=None, dtype=None):
         """Construct a linear transformation module"""
         # Initialize torch.nn.Module(father class)
-        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
 
         self.in_features = in_features # final dimension of the input
         self.out_features = out_features # final dimension of the output
+
+        factory_kwargs = {"device": device, "dtype": dtype}
         self.weight = Parameter(
             torch.empty((out_features, in_features), **factory_kwargs)
         )
@@ -27,8 +28,38 @@ class Linear(torch.nn.Module):
         a = -3 * std
         b = 3 * std
         torch.nn.init.trunc_normal_(self.weight, 0.0, std, a, b)
-        
 
     def forward(self, x: Tensor) -> Tensor:
         """Apply the linear transformation to the input."""
         return torch.matmul(x, self.weight.t())
+    
+
+
+class Embedding(torch.nn.Module):
+    __constants__ = [
+        "num_embeddings",
+        "embedding_dim"
+    ]
+    num_embeddings: int
+    embedding_dim: int
+    weight: Tensor
+    
+    def __init__(self, num_embeddings:int, embedding_dim:int, device=None, dtype=None):
+        """Construct an embedding module."""
+        super().__init__()
+
+        self.num_embeddings = num_embeddings # Size of the vocabulary
+        self.embedding_dim = embedding_dim # d_model, dimension of the embedding vectors
+        
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.weight = Parameter(
+            torch.empty((num_embeddings, embedding_dim), **factory_kwargs)
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.trunc_normal_(self.weight, 0.0, 1.0, -3.0, 3.0)
+
+    def forward(self, token_ids: Tensor) -> Tensor:
+        """Lookup the embedding vectors for the given token IDs."""
+        return self.weight[token_ids]
