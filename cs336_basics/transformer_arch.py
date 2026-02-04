@@ -10,7 +10,10 @@ class Linear(torch.nn.Module):
     weight: Tensor
 
     def __init__(self, in_features:int, out_features:int, device=None, dtype=None):
-        """Construct a linear transformation module"""
+        """
+        Construct a linear transformation module
+        -> (out_features, in_features)
+        """
         # Initialize torch.nn.Module(father class)
         super().__init__()
 
@@ -104,3 +107,43 @@ class RMSNorm(torch.nn.Module):
         result = normed_x * self.gain
         # Return the result in the original dtype
         return result.to(in_dtype)
+    
+
+class SwiGLU_FeedForward(torch.nn.Module):
+    __constants__ = [
+        "d_model",
+        "d_ff"
+    ]
+    d_model: int
+    d_ff: int
+
+    def __init__(self, d_model: int, d_ff=None, device=None, dtype=None):
+        super().__init__()
+
+        self.d_model = d_model
+        if d_ff:
+            self.d_ff = d_ff
+        else:
+            d_ff = int(8/3 * d_model)
+            self.d_ff = 64 * ((d_ff + 64 - 1) // 64) # 64x to make good use of memory
+
+        self.w1 = Linear(self.d_model, self.d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(self.d_ff, self.d_model, device=device, dtype=dtype)
+        self.w3 = Linear(self.d_model, self.d_ff, device=device, dtype=dtype)
+
+    #def forward_SiLU(self, x: Tensor) -> Tensor:
+        #"""
+        #SiLU(x) = x * sigmoid(x)
+        #in SwiGLU, x here is w1(x)
+        #"""
+        #return x * torch.sigmoid(x)
+
+    def forward_SwiGLU(self, x: Tensor) -> Tensor:
+        """
+        input: (d_model)
+        output: (d_model)
+        SiLU + Gate: w2(SiLU(w1(x)) * w3(x))
+        """
+        silu = self.w1(x) * torch.sigmoid(self.w1(x))
+        glu = silu * self.w3(x)
+        return self.w2(glu)
