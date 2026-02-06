@@ -2,6 +2,7 @@ import math
 import torch
 from torch import Tensor
 from torch.nn.parameter import Parameter
+from jaxtyping import Bool, Float, Int
 import einops
 
 class Linear(torch.nn.Module):
@@ -222,3 +223,33 @@ def softmax(in_features: Tensor, dim: int) -> Tensor:
     sum_exp = torch.sum(exp_x, dim=dim, keepdim=True)
     
     return exp_x / sum_exp
+
+
+def scaled_dot_product_attention(
+    Q: Float[Tensor, "batch_size ... queries d_k"],
+    K: Float[Tensor, "batch_size ... keys d_k"],
+    V: Float[Tensor, "batch_size ... keys d_v"],
+    mask: Bool[Tensor, " ... queries keys"] | None = None,
+) -> Float[Tensor, "batch_size ... queries d_v"]:
+    # softmax(Q.t @ K / sqrt(d_k)) @ V
+    # if mask: softmax(Q.t @ K / sqrt(d_k) + mask) @ V
+    # where False in mask is -inf
+
+    # 1. get d_k
+    d_k = Q.shape[-1]
+
+    # 2. Q.t @ K / sqrt(d_k)
+    qk = torch.einsum('b...qd, b...kd -> b...qk', Q, K) / math.sqrt(d_k)
+
+    # 3. process mask
+    if mask is not None:
+        qk.masked_fill_(mask == False, float('-inf'))
+
+    # 4. softmax(qk)
+    weights = softmax(qk, dim=-1)
+
+    # 5.@V
+    result = torch.einsum('b...qk, b...kv -> b...qv', weights, V)
+    return result
+
+
