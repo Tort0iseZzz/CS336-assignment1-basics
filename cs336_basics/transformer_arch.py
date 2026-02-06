@@ -2,6 +2,7 @@ import math
 import torch
 from torch import Tensor
 from torch.nn.parameter import Parameter
+import einops
 
 class Linear(torch.nn.Module):
     __constants__ = ["in_features", "out_features"]
@@ -147,3 +148,61 @@ class SwiGLU_FeedForward(torch.nn.Module):
         silu = self.w1(x) * torch.sigmoid(self.w1(x))
         glu = silu * self.w3(x)
         return self.w2(glu)
+    
+
+class RotaryPositionalEmbedding(torch.nn.Module):
+    cos: Tensor
+    sin: Tensor
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        """
+        Construct the RoPE module and create buffers.
+            theta # Θ value for the RoPE
+            d_k # dimension of query and key vectors
+            max_seq_len # Maximum sequence length that will be inputted
+            device # Device to store the buffer on
+        """
+        super().__init__()
+        
+        # 1 / theta^((2k-2)/d), for k = 1,...,d/2
+        # i.e. 1 / theta^((0,2,...,d-2)/d)
+        angles = 1.0 / (theta ** (torch.arange(0, d_k, 2, device=device).float() / d_k))
+        # i = 0,1,...,max_len prepared for all positions
+        position_is = torch.arange(max_seq_len, device=device, dtype=angles.dtype)
+
+        # i / theta^((0,2,...,d-2)/d)
+        angle_is = torch.einsum("i, j -> ij", position_is, angles)
+        
+        # compute sin(angle) cos(angle) and buffer them
+        # persistent=False 表示不把这个表存在模型权重文件里，每次初始化重算即可
+        self.register_buffer("cos", angle_is.cos(), persistent=False)
+        self.register_buffer("sin", angle_is.sin(), persistent=False)
+
+    def forward(self, x: Tensor, token_positions: Tensor) -> Tensor:
+        """
+        x: (..., seq_len, d_k)
+        token_positions: (..., seq_len) 
+        # note that tokens are not necessarily start from 0
+        return: (..., seq_len, d_k)
+        """
+        # (..., seq_len, d/2)
+        cos_selected = self.cos[token_positions]
+        sin_selected = self.sin[token_positions]
+
+        # for every two neighbor input elements (x1, x2)
+        # after rotate: (x1cos - x2sin, x1sin + x2cos)
+        # -> we don't need to actually build the huge rotate matrix R
+        # instead, (x1, x2) * cos + (-x2, x1) * sin!
+        # therefore, we need tensor (cos, cos), (sin, sin) (doubled)
+        # and tensor (x1, x2), (-x2, x1)
+
+        # 1. double: (..., seq_len, d_k)
+        cos_selected = torch.repeat_interleave(cos_selected, 2, dim=-1)
+        sin_selected = torch.repeat_interleave(sin_selected, 2, dim=-1)
+
+        # 2. (x1, x2) -> (-x2, x1)
+        x_interleaved = einops.rearrange(x, "... (n c) -> ... n c", c=2)
+        x_1, x_2 = x_interleaved[..., 0], x_interleaved[..., 1]
+        x_interleaved = einops.rearrange(torch.stack([-x_2, x_1], dim=-1), "... n c -> ... (n c)")
+
+        # 3. (x1, x2) * cos + (-x2, x1) * sin
+        return x * cos_selected + x_interleaved * sin_selected
