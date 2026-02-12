@@ -49,7 +49,11 @@ class Embedding(torch.nn.Module):
     def __init__(
         self, num_embeddings: int, embedding_dim: int, device=None, dtype=None
     ):
-        """Construct an embedding module."""
+        """
+        Construct an embedding module.
+            num_embeddings: vocab size
+            embedding_dim: d_model
+        """
         super().__init__()
 
         self.num_embeddings = num_embeddings  # Size of the vocabulary
@@ -373,3 +377,84 @@ class Transformer_block(torch.nn.Module):
         rms_y = self.rms_ffn.forward(y)
         ffn_y = self.ffn.forward_SwiGLU(rms_y)
         return ffn_y + y
+
+
+class Transformer_lm(torch.nn.Module):
+    """
+    token embedding -> transformer block * num_layers
+      -> Norm -> Linear -> softmax
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int,
+        d_model: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: int,
+        rope_theta: float,
+        eps=None,
+        device=None,
+        dtype=None,
+    ):
+        """
+        vocab_size (int): The number of unique items in the output vocabulary to be predicted.
+        - will be used in embedding as num_embeddings
+        context_length (int): The maximum number of tokens to process at once.
+        - will be used as max_seq_len
+        d_model (int): The dimensionality of the model embeddings and sublayer outputs.
+        num_layers (int): The number of Transformer layers to use.
+        num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
+            evenly divisible by `num_heads`.
+        d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
+        rope_theta (float): The RoPE Theta parameter.
+        """
+        super().__init__()
+        self.max_seq_len = context_length
+        self.token_embedding = Embedding(vocab_size, d_model, device, dtype)
+        self.layers = torch.nn.ModuleList(
+            [
+                Transformer_block(
+                    d_model,
+                    num_heads,
+                    d_ff,
+                    context_length,
+                    rope_theta,
+                    eps,
+                    device,
+                    dtype,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.norm = RMSNorm(d_model, eps, device, dtype)
+        self.embedding_out = Linear(d_model, vocab_size, device, dtype)
+        # OPTIONAL? 利用权重共享，最后的linear(embedding out)和embedding使用一个权重矩阵
+        # self.embedding_out.weight = self.token_embedding.weight
+
+    def forward(self, x: Tensor, token_position=None):
+        """
+        x: (batch_size, seq_len), seq_len < max_len
+        out: (batch_size, seq_len, vocab_size)
+        """
+        seq_len = x.shape[-1]
+        assert seq_len <= self.max_seq_len
+
+        # 1. embedding
+        x = self.token_embedding.forward(x)  # (batch_size, seq_len, d_model)
+
+        # 2. transformer blocks
+        for layer in self.layers:
+            x = layer.forward(x, token_position)  # (batch_size, seq_len, d_model)
+
+        # 3. norm
+        x = self.norm.forward(x)  # (batch_size, seq_len, d_model)
+
+        # 4. embedding out(Linear)
+        x = self.embedding_out.forward(x)  # (batch_size, seq_len, vocab_size)
+
+        # 5. softmax
+        # x = softmax(x, -1) # (batch_size, seq_len, vocab_size)
+
+        return x
