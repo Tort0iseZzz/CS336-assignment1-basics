@@ -5,13 +5,14 @@ from torch.nn.parameter import Parameter
 from jaxtyping import Bool, Float, Int
 import einops
 
+
 class Linear(torch.nn.Module):
     __constants__ = ["in_features", "out_features"]
     in_features: int
     out_features: int
     weight: Tensor
 
-    def __init__(self, in_features:int, out_features:int, device=None, dtype=None):
+    def __init__(self, in_features: int, out_features: int, device=None, dtype=None):
         """
         Construct a linear transformation module
         -> (out_features, in_features)
@@ -19,8 +20,8 @@ class Linear(torch.nn.Module):
         # Initialize torch.nn.Module(father class)
         super().__init__()
 
-        self.in_features = in_features # final dimension of the input
-        self.out_features = out_features # final dimension of the output
+        self.in_features = in_features  # final dimension of the input
+        self.out_features = out_features  # final dimension of the output
 
         factory_kwargs = {"device": device, "dtype": dtype}
         self.weight = Parameter(
@@ -37,25 +38,25 @@ class Linear(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """Apply the linear transformation to the input."""
         return torch.matmul(x, self.weight.t())
-    
 
 
 class Embedding(torch.nn.Module):
-    __constants__ = [
-        "num_embeddings",
-        "embedding_dim"
-    ]
+    __constants__ = ["num_embeddings", "embedding_dim"]
     num_embeddings: int
     embedding_dim: int
     weight: Tensor
-    
-    def __init__(self, num_embeddings:int, embedding_dim:int, device=None, dtype=None):
+
+    def __init__(
+        self, num_embeddings: int, embedding_dim: int, device=None, dtype=None
+    ):
         """Construct an embedding module."""
         super().__init__()
 
-        self.num_embeddings = num_embeddings # Size of the vocabulary
-        self.embedding_dim = embedding_dim # d_model, dimension of the embedding vectors
-        
+        self.num_embeddings = num_embeddings  # Size of the vocabulary
+        self.embedding_dim = (
+            embedding_dim  # d_model, dimension of the embedding vectors
+        )
+
         factory_kwargs = {"device": device, "dtype": dtype}
         self.weight = Parameter(
             torch.empty((num_embeddings, embedding_dim), **factory_kwargs)
@@ -68,14 +69,12 @@ class Embedding(torch.nn.Module):
     def forward(self, token_ids: Tensor) -> Tensor:
         """Lookup the embedding vectors for the given token IDs."""
         return self.weight[token_ids]
-    
+
 
 class RMSNorm(torch.nn.Module):
     """Root Mean Square Layer Normalization"""
-    __constants__ = [
-        "d_model",
-        "eps"
-    ]
+
+    __constants__ = ["d_model", "eps"]
     d_model: int
     eps: float
     gain: Tensor
@@ -84,13 +83,11 @@ class RMSNorm(torch.nn.Module):
         """Construct the RMSNorm module."""
         super().__init__()
 
-        self.d_model = d_model # Hidden dimension of the model
-        self.eps = eps # Epsilon value for numerical stability
+        self.d_model = d_model  # Hidden dimension of the model
+        self.eps = eps  # Epsilon value for numerical stability
 
         factory_kwargs = {"device": device, "dtype": dtype}
-        self.gain = Parameter(
-            torch.ones((d_model), **factory_kwargs)
-        )
+        self.gain = Parameter(torch.ones((d_model), **factory_kwargs))
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -109,13 +106,10 @@ class RMSNorm(torch.nn.Module):
         result = normed_x * self.gain
         # Return the result in the original dtype
         return result.to(in_dtype)
-    
+
 
 class SwiGLU_FeedForward(torch.nn.Module):
-    __constants__ = [
-        "d_model",
-        "d_ff"
-    ]
+    __constants__ = ["d_model", "d_ff"]
     d_model: int
     d_ff: int
 
@@ -126,19 +120,19 @@ class SwiGLU_FeedForward(torch.nn.Module):
         if d_ff:
             self.d_ff = d_ff
         else:
-            d_ff = int(8/3 * d_model)
-            self.d_ff = 64 * ((d_ff + 64 - 1) // 64) # 64x to make good use of memory
+            d_ff = int(8 / 3 * d_model)
+            self.d_ff = 64 * ((d_ff + 64 - 1) // 64)  # 64x to make good use of memory
 
         self.w1 = Linear(self.d_model, self.d_ff, device=device, dtype=dtype)
         self.w2 = Linear(self.d_ff, self.d_model, device=device, dtype=dtype)
         self.w3 = Linear(self.d_model, self.d_ff, device=device, dtype=dtype)
 
-    #def forward_SiLU(self, x: Tensor) -> Tensor:
-        #"""
-        #SiLU(x) = x * sigmoid(x)
-        #in SwiGLU, x here is w1(x)
-        #"""
-        #return x * torch.sigmoid(x)
+    # def forward_SiLU(self, x: Tensor) -> Tensor:
+    # """
+    # SiLU(x) = x * sigmoid(x)
+    # in SwiGLU, x here is w1(x)
+    # """
+    # return x * torch.sigmoid(x)
 
     def forward_SwiGLU(self, x: Tensor) -> Tensor:
         """
@@ -149,11 +143,12 @@ class SwiGLU_FeedForward(torch.nn.Module):
         silu = self.w1(x) * torch.sigmoid(self.w1(x))
         glu = silu * self.w3(x)
         return self.w2(glu)
-    
+
 
 class RotaryPositionalEmbedding(torch.nn.Module):
     cos: Tensor
     sin: Tensor
+
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
         """
         Construct the RoPE module and create buffers.
@@ -163,7 +158,7 @@ class RotaryPositionalEmbedding(torch.nn.Module):
             device # Device to store the buffer on
         """
         super().__init__()
-        
+
         # 1 / theta^((2k-2)/d), for k = 1,...,d/2
         # i.e. 1 / theta^((0,2,...,d-2)/d)
         angles = 1.0 / (theta ** (torch.arange(0, d_k, 2, device=device).float() / d_k))
@@ -172,7 +167,7 @@ class RotaryPositionalEmbedding(torch.nn.Module):
 
         # i / theta^((0,2,...,d-2)/d)
         angle_is = torch.einsum("i, j -> ij", position_is, angles)
-        
+
         # compute sin(angle) cos(angle) and buffer them
         # persistent=False 表示不把这个表存在模型权重文件里，每次初始化重算即可
         self.register_buffer("cos", angle_is.cos(), persistent=False)
@@ -181,8 +176,8 @@ class RotaryPositionalEmbedding(torch.nn.Module):
     def forward(self, x: Tensor, token_positions: Tensor) -> Tensor:
         """
         x: (..., seq_len, d_k)
-        token_positions: (..., seq_len) 
-        # note that tokens are not necessarily start from 0
+        token_positions: (..., seq_len)
+        * note that tokens are not necessarily start from 0
         return: (..., seq_len, d_k)
         """
         # (..., seq_len, d/2)
@@ -203,11 +198,13 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         # 2. (x1, x2) -> (-x2, x1)
         x_interleaved = einops.rearrange(x, "... (n c) -> ... n c", c=2)
         x_1, x_2 = x_interleaved[..., 0], x_interleaved[..., 1]
-        x_interleaved = einops.rearrange(torch.stack([-x_2, x_1], dim=-1), "... n c -> ... (n c)")
+        x_interleaved = einops.rearrange(
+            torch.stack([-x_2, x_1], dim=-1), "... n c -> ... (n c)"
+        )
 
         # 3. (x1, x2) * cos + (-x2, x1) * sin
         return x * cos_selected + x_interleaved * sin_selected
-    
+
 
 def softmax(in_features: Tensor, dim: int) -> Tensor:
     # softmax(xi) = exp(xi - max) / sum_j(exp(xj - max))
@@ -215,13 +212,13 @@ def softmax(in_features: Tensor, dim: int) -> Tensor:
 
     # 1. find the max_x
     max_x = torch.max(in_features, dim=dim, keepdim=True)[0]
-    
+
     # 2. e^(x - max)
     exp_x = torch.exp(in_features - max_x)
-    
+
     # 3. sum(exp(x))
     sum_exp = torch.sum(exp_x, dim=dim, keepdim=True)
-    
+
     return exp_x / sum_exp
 
 
@@ -239,17 +236,145 @@ def scaled_dot_product_attention(
     d_k = Q.shape[-1]
 
     # 2. Q.t @ K / sqrt(d_k)
-    qk = torch.einsum('b...qd, b...kd -> b...qk', Q, K) / math.sqrt(d_k)
+    qk = torch.einsum("b...qd, b...kd -> b...qk", Q, K) / math.sqrt(d_k)
 
     # 3. process mask
     if mask is not None:
-        qk.masked_fill_(mask == False, float('-inf'))
+        qk.masked_fill_(~mask, float("-inf"))
 
     # 4. softmax(qk)
     weights = softmax(qk, dim=-1)
 
     # 5.@V
-    result = torch.einsum('b...qk, b...kv -> b...qv', weights, V)
+    result = torch.einsum("b...qk, b...kv -> b...qv", weights, V)
     return result
 
 
+class Multihead_self_attention_without_rope(torch.nn.Module):
+    """
+    W_q: hd_k * d_model
+    W_k: hd_k * d_model
+    W_v: hd_v * d_model
+    W_o: d_model * hd_v
+    """
+
+    def __init__(self, d_model: int, num_heads: int, device=None, dtype=None):
+        """
+        d_model (int): Dimensionality of the feedforward input and output.
+        num_heads (int): Number of heads to use in multi-headed attention.
+        """
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.d_model = d_model
+        d_k = d_model // num_heads
+        d_v = d_model // num_heads
+
+        self.W_q = Linear(d_model, num_heads * d_k, device, dtype)
+        self.W_k = Linear(d_model, num_heads * d_k, device, dtype)
+        self.W_v = Linear(d_model, num_heads * d_v, device, dtype)
+        self.W_o = Linear(num_heads * d_v, d_model, device, dtype)
+
+    def forward_without_rope(self, x: Tensor):
+        """
+        x: (batch_size, seq_len, d_model)
+        """
+        seq_len = x.size(dim=-2)
+
+        # 1. linear forward
+        k = self.W_k.forward(x)
+        q = self.W_q.forward(x)
+        v = self.W_v.forward(x)
+        # KQ: (batch_size, seq_len, hd_k)
+        # V: (batch_size, seq_len, hd_v)
+
+        # 2. reshape to multiheads
+        # n: seq_len, h: num_heads, k: d_k, v: d_v
+        k = einops.rearrange(k, " ... n (h k) -> ... h n k", h=self.num_heads)
+        q = einops.rearrange(q, " ... n (h k) -> ... h n k", h=self.num_heads)
+        v = einops.rearrange(v, " ... n (h v) -> ... h n v", h=self.num_heads)
+
+        # 3. construct mask
+        mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+
+        # 4. apply attention
+        attention = scaled_dot_product_attention(q, k, v, mask)
+        # attention: (batch_size, num_heads, seq_len, d_v)
+
+        # 5. concat heads
+        attention = einops.rearrange(
+            attention, " ... h n v -> ... n (h v)", h=self.num_heads
+        )
+
+        # 6. W_o @ multiheads
+        return self.W_o.forward(attention)
+
+
+class Multihead_self_attention_with_rope(torch.nn.Module):
+    """
+    W_q: hd_k * d_model
+    W_k: hd_k * d_model
+    W_v: hd_v * d_model
+    W_o: d_model * hd_v
+    """
+
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, theta: float, device=None, dtype=None):
+        """
+        d_model (int): Dimensionality of the feedforward input and output.
+        num_heads (int): Number of heads to use in multi-headed attention.
+        max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+        theta (float): RoPE parameter.
+        """
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.d_model = d_model
+        d_k = d_model // num_heads
+        d_v = d_model // num_heads
+
+        self.W_q = Linear(d_model, num_heads * d_k, device, dtype)
+        self.W_k = Linear(d_model, num_heads * d_k, device, dtype)
+        self.W_v = Linear(d_model, num_heads * d_v, device, dtype)
+        self.W_o = Linear(num_heads * d_v, d_model, device, dtype)
+
+        self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device)
+
+    def forward_with_rope(self, x: Tensor, token_positions: Tensor | None):
+        """
+        x: (batch_size, seq_len, d_model)
+        token_positions: (batch_size, seq_len)
+        """
+        seq_len = x.size(dim=-2)
+
+        # 1. linear forward
+        k = self.W_k.forward(x)
+        q = self.W_q.forward(x)
+        v = self.W_v.forward(x)
+        # KQ: (batch_size, seq_len, hd_k)
+        # V: (batch_size, seq_len, hd_v)
+
+        # 2. reshape to multiheads
+        # n: seq_len, h: num_heads, k: d_k, v: d_v
+        k = einops.rearrange(k, " ... n (h k) -> ... h n k", h=self.num_heads)
+        q = einops.rearrange(q, " ... n (h k) -> ... h n k", h=self.num_heads)
+        v = einops.rearrange(v, " ... n (h v) -> ... h n v", h=self.num_heads)
+
+        # 3. apply rope to K and Q
+        if token_positions is not None:
+            k = self.rope.forward(k, token_positions)
+            q = self.rope.forward(q, token_positions)
+
+        # 4. construct mask
+        mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+
+        # 5. apply attention
+        attention = scaled_dot_product_attention(q, k, v, mask)
+        # attention: (batch_size, num_heads, seq_len, d_v)
+
+        # 6. concat heads
+        attention = einops.rearrange(
+            attention, " ... h n v -> ... n (h v)", h=self.num_heads
+        )
+
+        # 7. W_o @ multiheads
+        return self.W_o.forward(attention)
