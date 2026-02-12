@@ -115,6 +115,14 @@ class RMSNorm(torch.nn.Module):
         return result.to(in_dtype)
 
 
+def SiLU(x: Tensor) -> Tensor:
+        """
+        SiLU(x) = x * sigmoid(x)
+        in SwiGLU, x here is w1(x)
+        """
+        return x * torch.sigmoid(x)
+
+
 class SwiGLU_FeedForward(torch.nn.Module):
     __constants__ = ["d_model", "d_ff"]
     d_model: int
@@ -134,12 +142,6 @@ class SwiGLU_FeedForward(torch.nn.Module):
         self.w2 = Linear(self.d_ff, self.d_model, device=device, dtype=dtype)
         self.w3 = Linear(self.d_model, self.d_ff, device=device, dtype=dtype)
 
-    # def forward_SiLU(self, x: Tensor) -> Tensor:
-    # """
-    # SiLU(x) = x * sigmoid(x)
-    # in SwiGLU, x here is w1(x)
-    # """
-    # return x * torch.sigmoid(x)
 
     def forward_SwiGLU(self, x: Tensor) -> Tensor:
         """
@@ -147,7 +149,8 @@ class SwiGLU_FeedForward(torch.nn.Module):
         output: (d_model)
         SiLU + Gate: w2(SiLU(w1(x)) * w3(x))
         """
-        silu = self.w1(x) * torch.sigmoid(self.w1(x))
+        # silu = self.w1(x) * torch.sigmoid(self.w1(x))
+        silu = SiLU(self.w1(x))
         glu = silu * self.w3(x)
         return self.w2(glu)
 
