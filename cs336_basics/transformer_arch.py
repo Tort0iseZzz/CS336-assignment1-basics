@@ -250,7 +250,7 @@ def scaled_dot_product_attention(
     return result
 
 
-class Multihead_self_attention_without_rope(torch.nn.Module):
+class Multihead_self_attention(torch.nn.Module):
     """
     W_q: hd_k * d_model
     W_k: hd_k * d_model
@@ -258,67 +258,15 @@ class Multihead_self_attention_without_rope(torch.nn.Module):
     W_o: d_model * hd_v
     """
 
-    def __init__(self, d_model: int, num_heads: int, device=None, dtype=None):
-        """
-        d_model (int): Dimensionality of the feedforward input and output.
-        num_heads (int): Number of heads to use in multi-headed attention.
-        """
-        super().__init__()
-
-        self.num_heads = num_heads
-        self.d_model = d_model
-        d_k = d_model // num_heads
-        d_v = d_model // num_heads
-
-        self.W_q = Linear(d_model, num_heads * d_k, device, dtype)
-        self.W_k = Linear(d_model, num_heads * d_k, device, dtype)
-        self.W_v = Linear(d_model, num_heads * d_v, device, dtype)
-        self.W_o = Linear(num_heads * d_v, d_model, device, dtype)
-
-    def forward_without_rope(self, x: Tensor):
-        """
-        x: (batch_size, seq_len, d_model)
-        """
-        seq_len = x.size(dim=-2)
-
-        # 1. linear forward
-        k = self.W_k.forward(x)
-        q = self.W_q.forward(x)
-        v = self.W_v.forward(x)
-        # KQ: (batch_size, seq_len, hd_k)
-        # V: (batch_size, seq_len, hd_v)
-
-        # 2. reshape to multiheads
-        # n: seq_len, h: num_heads, k: d_k, v: d_v
-        k = einops.rearrange(k, " ... n (h k) -> ... h n k", h=self.num_heads)
-        q = einops.rearrange(q, " ... n (h k) -> ... h n k", h=self.num_heads)
-        v = einops.rearrange(v, " ... n (h v) -> ... h n v", h=self.num_heads)
-
-        # 3. construct mask
-        mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
-
-        # 4. apply attention
-        attention = scaled_dot_product_attention(q, k, v, mask)
-        # attention: (batch_size, num_heads, seq_len, d_v)
-
-        # 5. concat heads
-        attention = einops.rearrange(
-            attention, " ... h n v -> ... n (h v)", h=self.num_heads
-        )
-
-        # 6. W_o @ multiheads
-        return self.W_o.forward(attention)
-
-
-class Multihead_self_attention_with_rope(torch.nn.Module):
-    """
-    W_q: hd_k * d_model
-    W_k: hd_k * d_model
-    W_v: hd_v * d_model
-    W_o: d_model * hd_v
-    """
-
-    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, theta: float, device=None, dtype=None):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        max_seq_len=None,
+        theta=None,
+        device=None,
+        dtype=None,
+    ):
         """
         d_model (int): Dimensionality of the feedforward input and output.
         num_heads (int): Number of heads to use in multi-headed attention.
@@ -337,9 +285,10 @@ class Multihead_self_attention_with_rope(torch.nn.Module):
         self.W_v = Linear(d_model, num_heads * d_v, device, dtype)
         self.W_o = Linear(num_heads * d_v, d_model, device, dtype)
 
-        self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device)
+        if theta is not None and max_seq_len is not None:
+            self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device)
 
-    def forward_with_rope(self, x: Tensor, token_positions: Tensor | None):
+    def forward(self, x: Tensor, token_positions=None):
         """
         x: (batch_size, seq_len, d_model)
         token_positions: (batch_size, seq_len)
@@ -360,7 +309,7 @@ class Multihead_self_attention_with_rope(torch.nn.Module):
         v = einops.rearrange(v, " ... n (h v) -> ... h n v", h=self.num_heads)
 
         # 3. apply rope to K and Q
-        if token_positions is not None:
+        if token_positions is not None and self.rope is not None:
             k = self.rope.forward(k, token_positions)
             q = self.rope.forward(q, token_positions)
 
