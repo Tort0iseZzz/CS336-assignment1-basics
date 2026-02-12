@@ -313,8 +313,21 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    model = cs336_basics.transformer_arch.Transformer_block(d_model, num_heads,d_ff, max_seq_len, theta)
 
+    state_dict = {
+        "mha.W_q.weight": weights["attn.q_proj.weight"],
+        "mha.W_k.weight": weights["attn.k_proj.weight"],
+        "mha.W_v.weight": weights["attn.v_proj.weight"],
+        "mha.W_o.weight": weights["attn.output_proj.weight"],
+        "rms_mha.gain": weights["ln1.weight"],
+        "rms_ffn.gain": weights["ln2.weight"],
+        "ffn.w1.weight": weights["ffn.w1.weight"],
+        "ffn.w2.weight": weights["ffn.w2.weight"],
+        "ffn.w3.weight": weights["ffn.w3.weight"],
+        }
+    model.load_state_dict(state_dict)
+    return model.forward(in_features)
 
 def run_transformer_lm(
     vocab_size: int,
@@ -340,7 +353,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE Theta parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -418,7 +431,7 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    model = cs336_basics.transformer_arch.RMSNorm(d_model=d_model, eps=eps)
+    model = cs336_basics.transformer_arch.RMSNorm(d_model, eps)
 
     state_dict = {"gain": weights}
     model.load_state_dict(state_dict)

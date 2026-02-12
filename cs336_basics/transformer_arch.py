@@ -79,12 +79,15 @@ class RMSNorm(torch.nn.Module):
     eps: float
     gain: Tensor
 
-    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
+    def __init__(self, d_model: int, eps=None, device=None, dtype=None):
         """Construct the RMSNorm module."""
         super().__init__()
 
         self.d_model = d_model  # Hidden dimension of the model
-        self.eps = eps  # Epsilon value for numerical stability
+        if eps is None:
+            self.eps = 1e-5
+        else:
+            self.eps = eps  # Epsilon value for numerical stability
 
         factory_kwargs = {"device": device, "dtype": dtype}
         self.gain = Parameter(torch.ones((d_model), **factory_kwargs))
@@ -285,6 +288,7 @@ class Multihead_self_attention(torch.nn.Module):
         self.W_v = Linear(d_model, num_heads * d_v, device, dtype)
         self.W_o = Linear(num_heads * d_v, d_model, device, dtype)
 
+        self.rope = None
         if theta is not None and max_seq_len is not None:
             self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device)
 
@@ -309,7 +313,9 @@ class Multihead_self_attention(torch.nn.Module):
         v = einops.rearrange(v, " ... n (h v) -> ... h n v", h=self.num_heads)
 
         # 3. apply rope to K and Q
-        if token_positions is not None and self.rope is not None:
+        if self.rope is not None:
+            if token_positions is None:
+                token_positions = torch.arange(seq_len)
             k = self.rope.forward(k, token_positions)
             q = self.rope.forward(q, token_positions)
 
@@ -327,3 +333,43 @@ class Multihead_self_attention(torch.nn.Module):
 
         # 7. W_o @ multiheads
         return self.W_o.forward(attention)
+
+
+class Transformer_block(torch.nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        max_seq_len=None,
+        theta=None,
+        eps=None,
+        device=None,
+        dtype=None,
+    ):
+        """
+        d_model (int): The dimensionality of the Transformer block input.
+        num_heads (int): Number of heads to use in multi-headed attention.
+        - `d_model` must be evenly divisible by `num_heads`.
+        d_ff (int): Dimensionality of the feed-forward inner layer.
+        max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+        theta (float): RoPE parameter.
+        eps (float): rms parameter.
+        """
+        super().__init__()
+
+        self.rms_mha = RMSNorm(d_model, eps, device, dtype)
+        self.rms_ffn = RMSNorm(d_model, eps, device, dtype)
+        self.mha = Multihead_self_attention(d_model, num_heads, max_seq_len, theta)
+        self.ffn = SwiGLU_FeedForward(d_model, d_ff, device, dtype)
+
+    def forward(self, x: Tensor, token_position=None):
+        # MHA part: y = x + MHA(RMS(x))
+        rms_x = self.rms_mha.forward(x)
+        mha_x = self.mha.forward(rms_x, token_position)
+        y = x + mha_x
+
+        # FFN part: out = y + FFN(RMS(y))
+        rms_y = self.rms_ffn.forward(y)
+        ffn_y = self.ffn.forward_SwiGLU(rms_y)
+        return ffn_y + y
