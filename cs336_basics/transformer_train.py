@@ -5,7 +5,6 @@ from torch.nn.parameter import Parameter
 from collections.abc import Callable, Iterable
 from typing import Optional
 from jaxtyping import Bool, Float, Int
-import einops
 
 
 def cross_entropy(inputs: Tensor, targets: Tensor) -> Tensor:
