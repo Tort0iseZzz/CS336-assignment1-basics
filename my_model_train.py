@@ -42,7 +42,7 @@ def train():
     # 3. 初始化模型、优化器
     # 注意：这里的模型参数需根据你的 Transformer 实现进行配置
     model_config = {
-        "vocab_size": 10000,
+        "vocab_size": 32800,
         "num_layers": 6,
         "num_heads": 8,
         "d_model": 512,

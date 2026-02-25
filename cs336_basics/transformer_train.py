@@ -159,7 +159,8 @@ def gradient_clipping(
         return
 
     # 2: compute l2 norm
-    total_norm_sq = torch.tensor(0.0)  # compute total norm square first
+    device = grads[0].device
+    total_norm_sq = torch.tensor(0.0, device=device)  # compute total norm square first
     for g in grads:
         total_norm_sq += torch.sum(g**2)
     total_norm = torch.sqrt(total_norm_sq)

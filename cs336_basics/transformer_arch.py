@@ -327,8 +327,8 @@ class Multihead_self_attention(torch.nn.Module):
             q = self.rope.forward(q, token_positions)
 
         # 4. construct mask
-        mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
-
+        mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).bool()
+        
         # 5. apply attention
         attention = scaled_dot_product_attention(q, k, v, mask)
         # attention: (batch_size, num_heads, seq_len, d_v)
